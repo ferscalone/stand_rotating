@@ -1,0 +1,42 @@
+services:
+
+  dashboard3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: dashboard3
+
+    restart: unless-stopped
+
+    ports:
+      - "5180:80"
+
+    environment:
+      # Часовой пояс для времени в журналах и границ суток.
+      LOG_TZ: "Europe/Moscow"
+      # Канал управления освобождается сам, если владелец ничего не делает столько секунд.
+      LOCK_IDLE_TIMEOUT_S: "600"
+      # Сколько ждать владельца, закрывшего вкладку, прежде чем освободить канал.
+      LOCK_DISCONNECT_GRACE_S: "45"
+      # Сколько владелец может не отвечать на запрос управления (и ничего не делать).
+      LOCK_REQUEST_TIMEOUT_S: "60"
+      # Шаг записи телеметрии в журнал, мс (0 - не писать телеметрию).
+      LOG_TELEMETRY_INTERVAL_MS: "1000"
+      # Сколько дней хранить журналы (0 - бессрочно).
+      LOG_RETENTION_DAYS: "180"
+
+    volumes:
+      # Журналы и библиотека программ остаются на хосте и переживают пересборку.
+      - ./logs:/app/logs
+      - ./data:/app/data
+
+    networks:
+      # Общая сеть шлюза TMVOS: nginx ходит сюда по имени контейнера (http://dashboard3)
+      # и публикует панель как http://tmvos.panel/rotate/ (см. README, раздел «Деплой»).
+      - tmvos
+
+networks:
+  # Создаётся один раз командой: docker network create tmvos
+  tmvos:
+    external: true

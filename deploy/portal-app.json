@@ -1,0 +1,11 @@
+{
+  "id": "rotate",
+  "title": "Стенд вращения",
+  "subtitle": "Вращение · программы",
+  "path": "/rotate/",
+  "status": {
+    "type": "stand",
+    "device": "http://<IP стенда>/v1/health",
+    "panel": "http://dashboard3/api/health"
+  }
+}

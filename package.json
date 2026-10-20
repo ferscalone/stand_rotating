@@ -1,0 +1,27 @@
+{
+  "name": "rotate-stand-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Web dashboard for the ESP32-S3 rotation stand (v1 REST/WebSocket API, program builder).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "start": "node server/index.mjs",
+    "sim": "node tools/stand-sim.mjs"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "uplot": "^1.6.31"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}

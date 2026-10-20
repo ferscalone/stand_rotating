@@ -1,0 +1,945 @@
+/* ============================================================================
+   Дашборд вращающегося стенда - тема оформления
+   Светлая тема использует slate-палитру Tailwind (oklch); тёмная тема
+   использует собственную charcoal-палитру с тоном 285° (семейство #13121c) и
+   синим аналоговым акцентом. Везде используется шаг сетки 4px. По умолчанию
+   тёмная тема; светлая - через переключатель в шапке. Без CDN-шрифтов.
+   ============================================================================ */
+
+:root {
+  --font-ui: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo,
+    Consolas, monospace;
+
+  /* отступы (шаг 4px) */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+}
+
+/* ── Тёмная (по умолчанию) - charcoal с лёгким фиолетовым подтоном ───────── */
+/* Нейтральные тона расположены на тоне 285° (семейство #13121c) с очень низкой
+   насыщенностью, поэтому поверхность выглядит как спокойный почти нейтральный
+   charcoal - не как холодный насыщенный синий прежней slate-палитры. Синий
+   акцент (тон 255°) отстоит примерно на 36° по цветовому кругу, то есть образует
+   аналоговую пару, что сохраняет гармонию акцента с поверхностью. */
+:root,
+:root[data-theme="dark"] {
+  --bg: oklch(19% 0.018 285);        /* ~#12131b - запрошенное семейство #13121c */
+  --panel: oklch(22.5% 0.02 285);
+  --panel-2: oklch(25.8% 0.022 285);
+  --border: oklch(32% 0.02 285);
+  --border-2: oklch(39% 0.026 285);
+  --text: oklch(92.8% 0.012 280);
+  --text-hi: oklch(98.4% 0.005 275);
+  --muted: oklch(70.2% 0.024 285);
+  --faint: oklch(55.2% 0.028 285);
+
+  --accent: oklch(70.7% 0.165 255);   /* синий, аналоговый к поверхности 285° */
+  --accent-hi: oklch(80.9% 0.105 252);
+  --accent-weak: oklch(70.7% 0.165 255 / 0.14);
+  --ok: oklch(76.5% 0.177 163.223);       /* emerald-400 */
+  --warn: oklch(82.8% 0.189 84.429);      /* amber-400 */
+  --danger: oklch(70.4% 0.191 22.216);    /* red-400 */
+
+  --shadow: 0 1px 2px oklch(0% 0 0 / 0.4), 0 8px 24px oklch(0% 0 0 / 0.28);
+  --grid-line: oklch(100% 0 0 / 0.05);
+}
+
+/* ── Светлая ──────────────────────────────────────────────────────────────── */
+:root[data-theme="light"] {
+  --bg: oklch(96.8% 0.007 247.896);        /* slate-100 */
+  --panel: oklch(100% 0 0);
+  --panel-2: oklch(98.4% 0.003 247.858);   /* slate-50 */
+  --border: oklch(92.9% 0.013 255.508);    /* slate-200 */
+  --border-2: oklch(86.9% 0.022 252.894);  /* slate-300 */
+  --text: oklch(27.9% 0.041 260.031);      /* slate-800 */
+  --text-hi: oklch(20.8% 0.042 265.755);   /* slate-900 */
+  --muted: oklch(44.6% 0.043 257.281);     /* slate-600 */
+  --faint: oklch(55.4% 0.046 257.417);     /* slate-500 */
+
+  --accent: oklch(54.6% 0.245 262.881);    /* blue-600 */
+  --accent-hi: oklch(48.8% 0.243 264.376);
+  --accent-weak: oklch(54.6% 0.245 262.881 / 0.1);
+  --ok: oklch(59.6% 0.145 163.225);        /* emerald-600 */
+  --warn: oklch(66.6% 0.179 58.318);       /* amber-600 */
+  --danger: oklch(57.7% 0.245 27.325);     /* red-600 */
+
+  --shadow: 0 1px 2px oklch(20% 0.04 260 / 0.06), 0 6px 20px oklch(20% 0.04 260 / 0.06);
+  --grid-line: oklch(0% 0 0 / 0.05);
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.app {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: var(--sp-6) var(--sp-5) var(--sp-8);
+}
+
+/* ── Шапка ─────────────────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-6);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-hi);
+}
+.header .spacer {
+  flex: 1;
+}
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* Элементы управления в шапке используют единый визуальный язык: одинаковая
+   высота, одинаковый радиус скругления, граница 1px. Цвет - единственное
+   различие, в трёх намеренно выбранных уровнях - поле ввода, кнопки,
+   индикатор состояния. */
+.host-input,
+.chip,
+.conn {
+  height: 34px;
+  box-sizing: border-box;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-2);
+  font: inherit;
+  font-size: 13px;
+}
+.host-input {
+  background: var(--panel-2); /* уровень 1: поверхность поля ввода */
+  color: var(--text);
+  padding: 0 11px;
+  min-width: 158px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.host-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  background: var(--panel); /* уровень 2: кнопки, все одинаковые */
+  color: var(--text);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.chip:hover {
+  border-color: var(--faint);
+}
+.conn {
+  display: inline-flex;
+  align-items: center; /* индикатор и подпись на одной вертикальной оси */
+  gap: 8px;
+  padding: 0 14px;
+  background: transparent; /* уровень 3: индикатор состояния, не кнопка */
+  white-space: nowrap;
+}
+.conn .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--faint);
+  flex: none;
+}
+.conn-label {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1; /* сжать line-box, чтобы подпись центрировалась точно по индикатору */
+  color: var(--text-hi);
+}
+.conn.connected .dot {
+  background: var(--ok);
+  box-shadow: 0 0 8px var(--ok);
+}
+.conn.reconnecting .dot {
+  background: var(--warn);
+  animation: pulse 1.1s ease-in-out infinite;
+}
+.conn.disconnected .dot {
+  background: var(--danger);
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* ── Сетка и карточки ───────────────────────────────────────────────────────── */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--sp-4);
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: var(--sp-5);
+  box-shadow: var(--shadow);
+  min-width: 0;
+}
+/* Карточки, которые должны заполнять высоту строки сетки и распределять
+   содержимое сверху вниз (главный блок вверху, список метаданных прижат книзу
+   через margin-top:auto). */
+.card.stretch {
+  display: flex;
+  flex-direction: column;
+}
+.card > .title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-4);
+}
+.card > .title h2 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.card .hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+.col-3 { grid-column: span 3; }
+.col-4 { grid-column: span 4; }
+.col-5 { grid-column: span 5; }
+.col-6 { grid-column: span 6; }
+.col-7 { grid-column: span 7; }
+.col-8 { grid-column: span 8; }
+.col-12 { grid-column: span 12; }
+@media (max-width: 980px) {
+  .col-3, .col-4, .col-5 { grid-column: span 6; }
+  .col-6, .col-7, .col-8 { grid-column: span 12; }
+}
+@media (max-width: 620px) {
+  .col-3, .col-4, .col-5, .col-6 { grid-column: span 12; }
+}
+
+/* Заглушка при отсутствии данных (en-dash). Тонкое начертание, чтобы читалось
+   как "отсутствие", а не как значение; Inter Variable корректно отрисовывает
+   вес 300 при любом размере. */
+.empty {
+  color: var(--faint);
+  font-weight: 300;
+}
+
+/* ── Управление (выровненная сетка: кнопка | подпись) ────────────────────── */
+/* Карточка управления: заполняет высоту строки сетки и делит её поровну между
+   строками кнопок, чтобы кнопки растягивались на всю высоту карточки независимо
+   от высоты соседней карточки. */
+.card.controls-card {
+  display: flex;
+  flex-direction: column;
+}
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  flex: 1; /* занять всю высоту под заголовком */
+  min-height: 0;
+}
+.control {
+  display: grid;
+  grid-template-columns: 168px 1fr; /* фиксированная колонка кнопки → подписи на одной оси */
+  align-items: center;
+  gap: var(--sp-4);
+  flex: 1; /* каждая строка управления растёт одинаково → равномерное распределение по вертикали */
+  min-height: 0;
+}
+/* Резервирует стабильную высоту для пояснительного текста (1 строка в состоянии
+   готовности, 2+ при показе причины блокировки). Центрируется и ограничивается,
+   чтобы более длинная причина росла ВНУТРИ этого фиксированного блока, а не
+   увеличивала высоту строки кнопки и не смещала остальные кнопки. */
+.ctl-meta {
+  min-width: 0;
+  min-height: 40px; /* ~2 строки .why + строка имени, чтобы 1 и 2 строки совпадали */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.ctl-meta .why {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2; /* не более 2 строк, чтобы высота была ограничена; полный текст в title */
+  overflow: hidden;
+}
+.ctl-btn {
+  width: 100%;      /* заполнить фиксированную колонку 168px */
+  min-height: 46px; /* ранее фиксировано 46px; теперь растёт со строкой, чтобы заполнять высокие карточки */
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: oklch(100% 0 0);
+  font: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.06s;
+}
+.ctl-btn.secondary {
+  background: transparent;
+  color: var(--accent);
+}
+.ctl-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.ctl-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.ctl-btn:disabled {
+  border-color: var(--border-2);
+  background: transparent;
+  color: var(--faint);
+  cursor: not-allowed;
+}
+.ctl-btn svg {
+  width: 15px;
+  height: 15px;
+}
+.ctl-meta .name {
+  font-weight: 600;
+  color: var(--text-hi);
+  font-size: 14px;
+}
+/* ── Статус ─────────────────────────────────────────────────────────────── */
+/* Общая высота главного блока + вертикальное центрирование, чтобы текст статуса
+   и значение силы располагались на одной оси в обеих карточках, несмотря на
+   разный размер глифов. */
+.status-main,
+.force {
+  min-height: 56px;
+}
+.status-main {
+  display: flex;
+  align-items: center;
+}
+.status-name {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--text-hi);
+}
+/* Вертикальный список метаданных: по одной строке на поле, чтобы изменяющееся
+   значение никогда не смещало соседнее. Прижат к низу карточки (margin-top:auto)
+   для заполнения высоты. Строки - подпись (слева) | значение (справа), значение
+   выровнено по правому краю + табличные цифры. */
+.meta-list {
+  display: flex;
+  flex-direction: column;
+  margin-top: auto;
+  font-size: 13px;
+  color: var(--muted);
+}
+.meta-list .row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: 9px 0;
+  border-top: 1px solid var(--border);
+}
+.meta-list .row:first-child {
+  border-top: none;
+}
+.meta-list .val {
+  color: var(--text);
+  font-weight: 600;
+  text-align: right;
+}
+.meta-list .val.num {
+  font-variant-numeric: tabular-nums;
+}
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border: 1px solid var(--border-2);
+  color: var(--muted);
+}
+.tag.ok { color: var(--ok); border-color: var(--ok); }
+.tag.fault { color: var(--danger); border-color: var(--danger); }
+
+/* ── Индикатор силы ──────────────────────────────────────────────────────── */
+/* Внешний блок центрирует группу значения по вертикали в общей высоте главного
+   блока; внутренняя группа держит значение + единицу на общей базовой линии. */
+.force {
+  display: flex;
+  align-items: center;
+}
+.force .group {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.force .val {
+  font-size: 46px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--text-hi);
+}
+.force .unit {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* ── Полоса прогресса циклов ─────────────────────────────────────────────── */
+.progress-track {
+  margin-top: var(--sp-4);
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--border-2);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+/* ── Циферблат угла (сбалансированная двухколоночная раскладка) ──────────── */
+.dial-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--sp-5);
+  align-items: center;
+}
+.dial-diag {
+  display: grid;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+.diag-item .k {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+}
+.diag-item .v {
+  font-size: 20px;
+  font-weight: 650;
+  color: var(--text-hi);
+}
+.diag-item .v .sub {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--faint);
+  margin-left: 6px;
+}
+/* Заглушка "нет данных" (en-dash): того же размера, что и текст подписи, только
+   приглушённая - а не крупного размера значения, который был бы унаследован. */
+.diag-item .v .empty {
+  font-size: 13px;
+  font-weight: 300;
+}
+
+/* ── Форма цели / диапазона с собственными счётчиками ────────────────────── */
+.form-grid {
+  display: grid;
+  gap: var(--sp-3);
+}
+.field label {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+.stepper {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: stretch;
+  background: var(--panel-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.stepper:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+.stepper input {
+  border: none;
+  background: transparent;
+  color: var(--text-hi);
+  padding: 9px 11px;
+  font: inherit;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  width: 100%;
+}
+.stepper input:focus {
+  outline: none;
+}
+.stepper .btns {
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  border-left: 1px solid var(--border-2);
+}
+.stepper .btns button {
+  width: 30px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 0.12s, color 0.12s;
+}
+.stepper .btns button:first-child {
+  border-bottom: 1px solid var(--border-2);
+}
+.stepper .btns button:hover {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+.stepper .btns svg {
+  width: 12px;
+  height: 12px;
+}
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3);
+}
+.warn-line {
+  color: var(--danger);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.note {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  border-left: 2px solid var(--border-2);
+  padding-left: var(--sp-3);
+}
+.note code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.btn-apply {
+  justify-self: start;
+  padding: 8px 16px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-2);
+  background: transparent;
+  color: var(--faint);
+  font: inherit;
+  font-weight: 600;
+  cursor: not-allowed;
+}
+/* Активное состояние: кнопка доступна для действия, поэтому должна ВЫГЛЯДЕТЬ
+   доступной - акцентная заливка + курсор-указатель. Без этого она выглядит так
+   же, как отключённая (приглушённый текст, курсор not-allowed), и оператор
+   принимает её за неработающий макет. */
+.btn-apply:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+.btn-apply:not(:disabled):hover {
+  filter: brightness(1.08);
+}
+
+/* ── Журнал событий ──────────────────────────────────────────────────────── */
+.log {
+  height: 200px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  padding: 2px 4px;
+  white-space: nowrap;
+}
+.log::-webkit-scrollbar {
+  width: 9px;
+}
+.log::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border-radius: 6px;
+}
+.log-line {
+  padding: 0;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.log-line .ts {
+  color: var(--faint);
+}
+.log-line.ev-state { color: var(--accent-hi); }
+.log-line.ev-park { color: var(--ok); }
+.log-line.ev-error { color: var(--danger); font-weight: 600; }
+.log-line.ev-wall { color: var(--warn); font-weight: 600; }
+.log-line.ev-cmd { color: var(--accent); }
+.log-line.ev-ack { color: var(--accent); }
+.log-line.ev-tare { color: var(--ok); font-weight: 600; }
+.log-line.ev-sys { color: var(--muted); }
+
+/* ── График ──────────────────────────────────────────────────────────────── */
+.chart-host {
+  width: 100%;
+}
+.uplot,
+.uplot * {
+  font-family: var(--font-ui) !important;
+}
+.u-legend {
+  font-size: 12px !important;
+}
+
+/* ── Канал управления (LockBar) ──────────────────────────────────────────── */
+/* Полоса во всю ширину над карточками. Цвет левой кромки и значка - состояние
+   канала: свободен (акцент), вы управляете (ok), занят другим (warn), нет связи
+   с сервером координации (danger). */
+.lockbar {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5);
+  border-left: 3px solid var(--lb-tone, var(--border-2));
+}
+.lockbar.free { --lb-tone: var(--accent); }
+.lockbar.own { --lb-tone: var(--ok); }
+.lockbar.busy { --lb-tone: var(--warn); }
+.lockbar.offline { --lb-tone: var(--danger); }
+.lb-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+.lb-icon {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-md);
+  color: var(--lb-tone);
+  background: color-mix(in oklch, var(--lb-tone) 14%, transparent);
+}
+.lb-icon svg {
+  width: 18px;
+  height: 18px;
+}
+.lb-text {
+  flex: 1;
+  min-width: 220px;
+}
+.lb-title {
+  font-weight: 700;
+  color: var(--text-hi);
+  font-size: 15px;
+}
+.lb-sub {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.lb-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.lb-transfer {
+  display: inline-flex;
+  gap: var(--sp-2);
+}
+.lb-select {
+  height: 34px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-2);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 0 8px;
+  max-width: 180px;
+}
+.host-input.lb-name {
+  min-width: 0;
+  width: 150px;
+}
+.host-input.lb-name.need {
+  border-color: var(--warn);
+}
+.lb-request {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  background: color-mix(in oklch, var(--warn) 12%, transparent);
+  border: 1px solid color-mix(in oklch, var(--warn) 45%, transparent);
+  font-size: 13px;
+}
+.lb-viewers {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+.lb-viewers-k {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10.5px;
+}
+.lb-viewer {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-2);
+  color: var(--text);
+}
+.lb-viewer .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.lb-viewer.live .dot {
+  background: var(--ok);
+}
+
+/* Акцентная кнопка того же размера, что и обычные .chip. */
+.chip.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.chip.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.chip svg {
+  width: 14px;
+  height: 14px;
+}
+.chip.small {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+a.chip {
+  text-decoration: none;
+}
+
+.tag.busy { color: var(--warn); border-color: var(--warn); }
+.lock-line {
+  color: var(--warn);
+  font-size: 12px;
+}
+
+/* ── Всплывающие уведомления ─────────────────────────────────────────────── */
+.toasts {
+  position: fixed;
+  bottom: var(--sp-4);
+  right: var(--sp-4);
+  z-index: 50;
+  display: grid;
+  gap: var(--sp-2);
+  width: min(360px, calc(100vw - 2 * var(--sp-4)));
+}
+.toast {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  padding: var(--sp-3) var(--sp-3) var(--sp-3) var(--sp-4);
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-left: 3px solid var(--t-tone, var(--accent));
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow);
+  animation: toast-in 0.18s ease-out;
+}
+.toast.ok { --t-tone: var(--ok); }
+.toast.warn { --t-tone: var(--warn); }
+.toast.danger { --t-tone: var(--danger); }
+.toast-body {
+  flex: 1;
+  min-width: 0;
+}
+.toast-title {
+  font-weight: 700;
+  color: var(--text-hi);
+}
+.toast-text {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-top: 2px;
+}
+.toast-actions {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+.toast-close {
+  border: none;
+  background: transparent;
+  color: var(--faint);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.toast-close:hover {
+  color: var(--text);
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* ── Архив журналов (модальное окно) ─────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: oklch(0% 0 0 / 0.45);
+  display: grid;
+  place-items: center;
+  padding: var(--sp-4);
+}
+.modal {
+  width: min(640px, 100%);
+  max-height: calc(100vh - 2 * var(--sp-8));
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.modal > .title {
+  margin: 0;
+}
+.archive {
+  overflow-y: auto;
+  display: grid;
+  gap: var(--sp-3);
+}
+.archive-day {
+  display: grid;
+  gap: var(--sp-1);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+.archive-date {
+  font-weight: 700;
+  color: var(--text-hi);
+}
+.archive-file {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 13px;
+}
+.archive-file .chip {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.archive-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.archive-size {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+/* Строки экранного журнала: действия людей и события канала. */
+.log-line.ev-lock { color: var(--warn); }
+.log-line.ev-user { color: var(--accent-hi); }
+.log-line.ev-cycle { color: var(--text); }
+.log-line.ev-done { color: var(--ok); font-weight: 600; }
