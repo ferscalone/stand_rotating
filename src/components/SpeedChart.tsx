@@ -28,12 +28,16 @@ export function SpeedChart({ history, theme }: Props) {
     const xs = new Array<number>(n);
     const rpm = new Array<number | null>(n);
     const amps = new Array<number | null>(n);
+    const h1 = new Array<number | null>(n);
+    const h2 = new Array<number | null>(n);
     for (let i = 0; i < n; i++) {
       xs[i] = history[i].t;
       rpm[i] = history[i].rpm;
       amps[i] = history[i].amps;
+      h1[i] = history[i].h1;
+      h2[i] = history[i].h2;
     }
-    return [xs, rpm, amps];
+    return [xs, rpm, amps, h1, h2];
   }, [history]);
 
   useEffect(() => {
@@ -44,6 +48,8 @@ export function SpeedChart({ history, theme }: Props) {
     const axis = cssVar("--muted", "#8595a1");
     const grid = cssVar("--grid-line", "rgba(255,255,255,0.05)");
     const fill = cssVar("--accent-weak", "rgba(61,139,253,0.14)");
+    const ok = cssVar("--ok", "#34d399");
+    const hi = cssVar("--accent-hi", "#9ec5ff");
 
     const opts: uPlot.Options = {
       width: host.clientWidth || 600,
@@ -69,6 +75,21 @@ export function SpeedChart({ history, theme }: Props) {
           stroke: warn,
           width: 1.5,
           value: (_u, v) => (v == null ? "–" : `${v.toFixed(2)} А`),
+        },
+        {
+          label: "Датчик №1",
+          scale: "rpm",
+          stroke: ok,
+          width: 1.5,
+          value: (_u, v) => (v == null ? "–" : `${v.toFixed(1)} об/мин`),
+        },
+        {
+          label: "Датчик №2",
+          scale: "rpm",
+          stroke: hi,
+          width: 1.5,
+          dash: [6, 4],
+          value: (_u, v) => (v == null ? "–" : `${v.toFixed(1)} об/мин`),
         },
       ],
       axes: [
@@ -99,7 +120,7 @@ export function SpeedChart({ history, theme }: Props) {
   return (
     <section className="card col-12">
       <div className="title">
-        <h2>Скорость и ток во времени</h2>
+        <h2>Скорость (двигатель и датчики Холла) и ток во времени</h2>
         <span className="hint">+ по часовой · − против часовой</span>
       </div>
       <div className="chart-host" ref={hostRef} />

@@ -7,6 +7,13 @@
 //   node tools/stand-sim.mjs [порт]      (по умолчанию 8090)
 //   в шапке панели: localhost:8090
 //
+// Датчики Холла: вал (реальные обороты = прошивочные / 4 при делении 1/16) с двумя
+// магнитами. Неисправности для проверки автостопа:
+//   curl -X POST "localhost:8090/sim/fault?stall=1"      вал заклинило
+//   curl -X POST "localhost:8090/sim/fault?dead2=1"      датчик 2 молчит
+//   curl -X POST "localhost:8090/sim/fault?nocurrent=1"  пропал ток драйвера
+//   curl -X POST "localhost:8090/sim/fault"              всё исправно
+//
 // Без зависимостей: минимальный WebSocket-сервер (только текстовые кадры).
 
 import { createHash } from "node:crypto";
@@ -16,6 +23,10 @@ const PORT = Number(process.argv[2]) || 8090;
 const RPM_MIN = 0.1;
 const RPM_MAX = 4000; // как Config::RPM_MAX прошивки
 const TICK_MS = 20;
+const STEPS_PER_REV = 800; // как Config::STEPS_PER_REV прошивки
+const SHAFT_STEPS_PER_REV = 3200; // реальные импульсы на оборот вала (1/16)
+const K = STEPS_PER_REV / SHAFT_STEPS_PER_REV; // реальных оборотов на прошивочный
+const MAGNET = [0.3, 0.32]; // положение магнитов, доля оборота вала
 
 const st = {
   state: "IDLE",
@@ -26,7 +37,12 @@ const st = {
   pos: 0, // оборотов, со знаком
   trip: 0,
   total: 1234.5,
-  cfg: { accel: 20, limit: 0, hold: true },
+  cfg: { accel: 20, limit: 0, hold: true, hallMask: 3, hallGuard: true, hallTol: 1, currentMin: 0 },
+  shaft: 0, // реальный угол вала, обороты
+  fault: { stall: false, dead: [false, false], nocurrent: false },
+  hall: [0, 1].map(() => ({ revs: 0, lastT: 0, prevT: 0, learned: false, travel: 0, bad: 0, offset: 0, lag: null })),
+  warnAt: {},
+  lowSince: 0,
   manual: { continuous: true, revs: 0, start: 0, target: null },
   pending: null,
   prog: null, // загруженная
@@ -124,6 +140,11 @@ function parse(text) {
     const rpm = Number(t[1]);
     return Number.isFinite(rpm) && t.length === 2 ? { type: "SPEED", rpm } : null;
   }
+  if (cmd === "guard") {
+    const v = (t[1] ?? "").toLowerCase();
+    if (t.length !== 2 || !["on", "off", "1", "0"].includes(v)) return null;
+    return { type: "GUARD", flag: v === "on" || v === "1" };
+  }
   const map = { stop: "STOP", estop: "ESTOP", start: "START", pause: "PAUSE", resume: "RESUME", reset: "RESET", zero: "ZERO" };
   return map[cmd] && t.length === 1 ? { type: map[cmd] } : null;
 }
@@ -184,13 +205,19 @@ function command(text) {
     case "RESET":
       if (s !== "ERROR") return ignored();
       st.error = "";
+      hallRelearn();
       setState("IDLE");
       return ack("RESET", "ok");
     case "ZERO":
       if (s !== "IDLE") return ignored();
       st.pos = 0;
       st.trip = 0;
+      for (const h of st.hall) h.revs = 0;
+      hallRelearn();
       return ack("ZERO", "ok");
+    case "GUARD":
+      st.cfg.hallGuard = c.flag;
+      return ack("GUARD", c.flag ? "on" : "off");
     case "START": {
       if (s !== "IDLE") return ignored();
       if (!st.prog) return ack("START", "no_program");
@@ -228,6 +255,92 @@ function command(text) {
       return;
     }
   }
+}
+
+function enterError(code) {
+  st.rpm = 0;
+  st.exec = st.exec ? { ...st.exec, done: true, phase: "-" } : null;
+  st.pending = null;
+  st.error = code;
+  ev("error", code);
+  setState("ERROR");
+}
+
+// ── Датчики Холла (упрощённо, как Hall.cpp прошивки) ─────────────────────────
+function hallRelearn() {
+  for (const h of st.hall) {
+    h.learned = false;
+    h.travel = 0;
+    h.bad = 0;
+    h.lag = null;
+  }
+}
+
+// Автостоп включён - авария; выключен - предупреждение не чаще раза в 5 с.
+function guardTrip(code, value) {
+  if (st.state === "ERROR") return false;
+  if (st.cfg.hallGuard) {
+    enterError(code);
+    return true;
+  }
+  const now = Date.now();
+  if (!st.warnAt[code] || now - st.warnAt[code] >= 5000) {
+    st.warnAt[code] = now;
+    ev("warn", `${code}:${value}`);
+  }
+  return false;
+}
+
+function hallStep(dMotorReal, driven) {
+  const prev = st.shaft;
+  if (!st.fault.stall || !driven) st.shaft += dMotorReal;
+  const motorReal = st.pos * K;
+  st.hall.forEach((h, i) => {
+    const m = MAGNET[i];
+    const crossed = Math.floor(prev - m) !== Math.floor(st.shaft - m);
+    const enabled = (st.cfg.hallMask >> i) & 1;
+    if (crossed && !st.fault.dead[i]) {
+      h.revs++;
+      h.prevT = h.lastT;
+      h.lastT = Date.now();
+      if (enabled && driven) {
+        if (!h.learned) {
+          h.learned = true;
+          h.offset = motorReal - st.shaft;
+          h.lag = 0;
+          h.bad = 0;
+        } else {
+          let d = motorReal - st.shaft - h.offset;
+          d -= Math.round(d);
+          h.lag = d * 360;
+          if (Math.abs(d) > 0.15) h.bad++;
+          else h.bad = 0;
+        }
+        h.travel = 0;
+      }
+    }
+    if (!enabled || !driven) return;
+    h.travel += Math.abs(dMotorReal);
+    const code = `hall${i + 1}_`;
+    if (h.learned) {
+      if (h.travel > 1.2 * (h.bad + 1)) h.bad++;
+      if (h.bad > st.cfg.hallTol && !guardTrip(code + "mismatch", h.bad)) {
+        h.learned = false;
+        h.travel = 0;
+        h.bad = 0;
+      }
+    } else if (h.travel > 1.5 && !guardTrip(code + "no_pulse", 0)) {
+      h.travel = 0;
+    }
+  });
+}
+
+function hallRpm(h) {
+  if (!h.lastT || !h.prevT) return 0;
+  const period = h.lastT - h.prevT;
+  const since = Date.now() - h.lastT;
+  if (since > 3 * period) return 0;
+  return 60000 / (since > 1.1 * period ? since : period);
 }
 
 // ── Программа ────────────────────────────────────────────────────────────────
@@ -325,6 +438,7 @@ function stepPhysics(dt) {
   if (st.rpm < want) st.rpm = Math.min(want, st.rpm + dv);
   else st.rpm = Math.max(want, st.rpm - dv);
   const d = (st.rpm / 60) * dt;
+  const pos0 = st.pos;
   // Шаг перескакивает точку остановки (или уже почти в ней) - встать ровно в неё.
   const crosses = stopAt !== null && d !== 0 && Math.sign(stopAt - st.pos) !== Math.sign(stopAt - st.pos - d);
   if (stopAt !== null && (crosses || (Math.abs(st.rpm) < 0.5 && Math.abs(stopAt - st.pos) < 0.01))) {
@@ -337,10 +451,16 @@ function stepPhysics(dt) {
     st.trip += Math.abs(d);
     st.total += Math.abs(d);
   }
+  hallStep((st.pos - pos0) * K, Math.abs(st.pos - pos0) > 0);
 }
 
+// Шаг физики - реально прошедшее время (таймеры Windows срабатывают реже 20 мс),
+// чтобы скорость по датчикам Холла совпадала с часами.
+let lastTickMs = Date.now();
 function tick() {
-  stepPhysics(TICK_MS / 1000);
+  const nowMs = Date.now();
+  stepPhysics(Math.min(0.2, (nowMs - lastTickMs) / 1000));
+  lastTickMs = nowMs;
   const stopped = Math.abs(st.rpm) < 1e-3;
   const s = st.state;
   if (s === "MANUAL" && !st.manual.continuous && stopped && Math.abs(st.pos - st.manual.target) < 0.011) {
@@ -381,12 +501,17 @@ function tick() {
   }
   // Ток: холостой + пропорционально скорости + бросок при разгоне.
   st.amps = (st.cfg.hold || !stopped ? 0.35 : 0.02) + Math.abs(st.rpm) * 0.006 + (Math.random() - 0.5) * 0.02;
+  if (st.fault.nocurrent) st.amps = 0.01;
+  // Нет тока при вращении (как в прошивке: не медленнее половины заданной, 1 с).
+  if (st.cfg.currentMin > 0 && !stopped && Math.abs(st.rpm) >= 0.5 * st.targetRpm && st.amps < st.cfg.currentMin) {
+    st.lowSince ||= Date.now();
+    if (Date.now() - st.lowSince >= 1000) {
+      st.lowSince = 0;
+      guardTrip("no_current", Math.round(st.amps * 1000));
+    }
+  } else st.lowSince = 0;
   if (st.cfg.limit > 0 && st.amps > st.cfg.limit && st.state !== "ERROR") {
-    st.rpm = 0;
-    st.exec = null;
-    st.error = "overcurrent";
-    ev("error", "overcurrent");
-    setState("ERROR");
+    enterError("overcurrent");
   }
 }
 
@@ -438,7 +563,31 @@ function telemetry() {
     cfg_hold_idle: st.cfg.hold ? 1 : 0,
     rpm_min: RPM_MIN,
     rpm_max: RPM_MAX,
-    steps_per_rev: 800,
+    steps_per_rev: STEPS_PER_REV,
+    shaft_steps_per_rev: SHAFT_STEPS_PER_REV,
+    cfg_current_min_a: st.cfg.currentMin,
+    hall_mask: st.cfg.hallMask,
+    hall_guard: st.cfg.hallGuard ? 1 : 0,
+    hall_tol: st.cfg.hallTol,
+    ...Object.fromEntries(
+      st.hall.flatMap((h, i) => {
+        const p = `h${i + 1}_`;
+        const enabled = (st.cfg.hallMask >> i) & 1;
+        let frac = st.shaft - Math.floor(st.shaft);
+        let dist = Math.abs(frac - MAGNET[i]);
+        if (dist > 0.5) dist = 1 - dist;
+        return [
+          [p + "st", !enabled ? "off" : h.learned ? "ok" : "learn"],
+          [p + "on", !st.fault.dead[i] && dist < 0.015 ? 1 : 0],
+          [p + "revs", h.revs],
+          [p + "rpm", round(hallRpm(h), 2)],
+          [p + "bad", h.learned ? h.bad : 0],
+          [p + "lag", h.learned && h.lag !== null ? round(h.lag, 1) : null],
+        ];
+      }),
+    ),
+    hall_phase_ok: hallRpm(st.hall[0]) > 0 && hallRpm(st.hall[1]) > 0 ? 1 : 0,
+    hall_phase: round((MAGNET[1] - MAGNET[0]) * 360 * Math.sign(st.rpm || 1), 1),
     uptime_ms: uptime(),
   };
 }
@@ -492,16 +641,48 @@ const server = http.createServer((req, res) => {
         return send(res, 200, { accepted: c.type });
       }
       case "POST /v1/config": {
-        const accel = Number(params.get("accel_rpm_s"));
-        const limit = Number(params.get("current_limit_a"));
-        const hold = params.get("hold_idle");
-        if (!(accel >= 1 && accel <= 1000) || !(limit >= 0 && limit <= 3.2) || (hold !== "0" && hold !== "1")) {
+        const c = { ...st.cfg };
+        const num = (k) => (params.has(k) ? Number(params.get(k)) : undefined);
+        const set = (k, v) => v !== undefined && (c[k] = v);
+        set("accel", num("accel_rpm_s"));
+        set("limit", num("current_limit_a"));
+        if (params.has("hold_idle")) c.hold = params.get("hold_idle") === "1";
+        set("hallMask", num("hall_mask"));
+        if (params.has("hall_guard")) c.hallGuard = params.get("hall_guard") === "1";
+        set("hallTol", num("hall_tol"));
+        set("currentMin", num("current_min_a"));
+        if (
+          !(c.accel >= 1 && c.accel <= 1000) ||
+          !(c.limit >= 0 && c.limit <= 3.2) ||
+          !(c.hallMask >= 0 && c.hallMask <= 3) ||
+          !(c.hallTol >= 1 && c.hallTol <= 20) ||
+          !(c.currentMin >= 0 && c.currentMin <= 3.2)
+        ) {
           return send(res, 400, { error: "invalid", detail: "out of range" });
         }
         if (busy) return send(res, 409, { error: "busy", detail: "stand must be stopped" });
-        st.cfg = { accel, limit, hold: hold === "1" };
-        return send(res, 200, { applied: { accel_rpm_s: accel, current_limit_a: limit, hold_idle: hold === "1" ? 1 : 0 } });
+        if (c.hallMask !== st.cfg.hallMask) hallRelearn();
+        st.cfg = c;
+        return send(res, 200, {
+          applied: {
+            accel_rpm_s: c.accel,
+            current_limit_a: c.limit,
+            hold_idle: c.hold ? 1 : 0,
+            hall_mask: c.hallMask,
+            hall_guard: c.hallGuard ? 1 : 0,
+            hall_tol: c.hallTol,
+            current_min_a: c.currentMin,
+          },
+        });
       }
+      case "POST /sim/fault":
+        st.fault = {
+          stall: params.get("stall") === "1",
+          dead: [params.get("dead1") === "1", params.get("dead2") === "1"],
+          nocurrent: params.get("nocurrent") === "1",
+        };
+        console.log("[sim] неисправности:", JSON.stringify(st.fault));
+        return send(res, 200, { fault: st.fault });
       case "GET /v1/program":
         return st.prog ? send(res, 200, st.prog) : send(res, 404, { error: "no program" });
       case "POST /v1/program": {

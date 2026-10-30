@@ -36,7 +36,7 @@ export interface LockRequest {
 export interface JournalEntry {
   ts: number;
   host: string;
-  kind: "lock" | "cmd" | "config" | "warn" | "program";
+  kind: "lock" | "cmd" | "config" | "warn" | "program" | "run";
   text: string;
   user?: string;
   client?: string;

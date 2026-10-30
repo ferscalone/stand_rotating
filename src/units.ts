@@ -9,24 +9,29 @@ import type { Program, Telemetry } from "./types";
 //   реальные = прошивочные × k,   k = steps_per_rev прошивки / SHAFT_STEPS_PER_REV
 //
 // Если прошивку когда-нибудь пересоберут с 3200, k станет 1 и пересчёт исчезнет сам.
+// Новая прошивка сама сообщает реальное значение (shaft_steps_per_rev) - тогда
+// константа ниже не используется.
+//
+// Данные датчиков Холла (h1_*, h2_*) - уже реальные обороты вала, их не трогаем.
 
-/** Импульсов STEP на один реальный оборот вала: 200 шагов × 1/16. */
+/** Импульсов STEP на один реальный оборот вала: 200 шагов × 1/16 (если прошивка не прислала). */
 export const SHAFT_STEPS_PER_REV = 200 * 16;
 
 /** steps_per_rev прошивки до первого кадра телеметрии (Config.h: 800). */
 const FIRMWARE_STEPS_PER_REV_DEFAULT = 800;
 
 /** Коэффициент «прошивочный оборот → реальный оборот». */
-export function revFactor(firmwareStepsPerRev: number | undefined): number {
+export function revFactor(firmwareStepsPerRev: number | undefined, shaftStepsPerRev?: number): number {
   const fw = firmwareStepsPerRev && firmwareStepsPerRev > 0 ? firmwareStepsPerRev : FIRMWARE_STEPS_PER_REV_DEFAULT;
-  return fw / SHAFT_STEPS_PER_REV;
+  const shaft = shaftStepsPerRev && shaftStepsPerRev > 0 ? shaftStepsPerRev : SHAFT_STEPS_PER_REV;
+  return fw / shaft;
 }
 
 export const defaultRevFactor = () => revFactor(undefined);
 
 /** Телеметрия прошивки → реальные обороты и об/мин. */
 export function telemetryToShaft(t: Telemetry): Telemetry {
-  const k = revFactor(t.steps_per_rev);
+  const k = revFactor(t.steps_per_rev, t.shaft_steps_per_rev);
   if (k === 1) return t;
   const revsF = t.revs_f * k;
   return {
@@ -42,7 +47,7 @@ export function telemetryToShaft(t: Telemetry): Telemetry {
     cfg_accel_rpm_s: t.cfg_accel_rpm_s * k,
     rpm_min: t.rpm_min * k,
     rpm_max: t.rpm_max * k,
-    steps_per_rev: SHAFT_STEPS_PER_REV,
+    steps_per_rev: t.shaft_steps_per_rev ?? SHAFT_STEPS_PER_REV,
   };
 }
 

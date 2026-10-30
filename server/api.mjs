@@ -12,6 +12,8 @@
 //      в logs/<дата>/telemetry_<стенд>.jsonl. Архив можно скачать из панели в CSV.
 //   3. Библиотека программ вращения (только у панели вращающегося стенда): общий
 //      для всех операторов список программ в data/programs.json.
+//   4. Регистратор и испытания (runs.mjs): сервер сам подключается к стенду и пишет
+//      телеметрию и испытания (logs/runs/), даже когда ни одна панель не открыта.
 //
 // Транспорт: Server-Sent Events (сервер -> браузер) + JSON POST (браузер ->
 // сервер). Ни одной внешней зависимости - только стандартная библиотека Node.
@@ -25,6 +27,7 @@ import { randomBytes } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { createRecorder, createRunStore, SAMPLE_COLUMNS, toShaftUnits } from "./runs.mjs";
 
 // ── Настройки (переменные окружения) ─────────────────────────────────────────
 function envNum(name, def) {
@@ -64,6 +67,21 @@ export function loadOptions(overrides = {}) {
     telemetryIntervalMs: envNum("LOG_TELEMETRY_INTERVAL_MS", 1000),
     // Сколько дней хранить журналы (0 - хранить всё).
     retentionDays: envNum("LOG_RETENTION_DAYS", 180),
+    // Регистратор: сервер сам держит WebSocket к стенду и пишет телеметрию/испытания.
+    recorder: process.env.RECORDER !== "0",
+    // Стенды, которые писать всегда (через запятую: IP или имя[:порт]).
+    recordHosts: (process.env.RECORD_HOSTS || "")
+      .split(",")
+      .map((h) => h.trim())
+      .filter(Boolean),
+    // Начинать запись стенда, как только его открыли в панели.
+    recordAuto: process.env.RECORD_AUTO !== "0",
+    // Шаг записи кадров испытания, мс (0 - каждый кадр, ~5 Гц).
+    runSampleMs: envNum("RUN_SAMPLE_MS", 0),
+    // Сколько дней хранить испытания (0 - всегда).
+    runRetentionDays: envNum("RUN_RETENTION_DAYS", 0),
+    // Реальных импульсов на оборот вала, если прошивка их не сообщает (1/16 шага).
+    shaftStepsPerRev: envNum("SHAFT_STEPS_PER_REV", 3200),
     ...overrides,
   };
 }
@@ -336,6 +354,23 @@ class ProgramLibrary {
   }
 }
 
+function runResultText(m) {
+  switch (m.result) {
+    case "completed":
+      return "выполнено";
+    case "aborted":
+      return "остановлено оператором";
+    case "error":
+      return `авария${m.error ? ": " + m.error : ""}`;
+    case "interrupted":
+      return "прервана запись";
+    default:
+      return "остановлено";
+  }
+}
+
+const fmtRevs = (v) => (Math.round((v ?? 0) * 100) / 100).toLocaleString("ru-RU");
+
 // ── Координатор ──────────────────────────────────────────────────────────────
 export function createApi(overrides = {}) {
   const opt = loadOptions(overrides);
@@ -343,6 +378,90 @@ export function createApi(overrides = {}) {
   const journal = new Journal(opt.logDir, clock);
   const library = new ProgramLibrary(opt.dataDir);
   const startedAt = Date.now();
+
+  // Испытания и регистратор. Записи «испытание начато/завершено» видят все зрители.
+  const runs = createRunStore({
+    dir: path.join(opt.logDir, "runs"),
+    retentionDays: opt.runRetentionDays,
+    sampleMs: opt.runSampleMs,
+    fmtTime: (ms) => clock(ms).full.slice(0, 19),
+    onRunChange: (host, meta, what) => {
+      const name = meta.program?.name ? `программа «${meta.program.name}»` : "ручное вращение";
+      const text =
+        what === "start"
+          ? `Испытание начато: ${name}`
+          : `Испытание завершено (${runResultText(meta)}): ${name}, ${fmtRevs(meta.stats.revs_motor)} об за ${fmtDuration(meta.stats.duration_s * 1000)}`;
+      record(hostState(host), "run", text, { run: meta.id });
+    },
+  });
+  void runs.init();
+  const recorder = opt.recorder
+    ? createRecorder({
+        file: path.join(opt.dataDir, "recorder-hosts.json"),
+        onFrame: (key, msg) => {
+          if (msg && typeof msg === "object" && "event" in msg) ingestEvent(key, msg);
+          else if (msg && typeof msg === "object" && "state" in msg) {
+            ingestTelemetry(key, toShaftUnits(msg, opt.shaftStepsPerRev), Date.now());
+          }
+        },
+        onStatusChange: (key, connected) => {
+          journal.write("journal", {
+            ts: Date.now(),
+            host: key,
+            kind: "recorder",
+            text: connected ? "Регистратор сервера подключился к стенду" : "Регистратор сервера потерял связь со стендом",
+          });
+        },
+      })
+    : null;
+  if (recorder) {
+    void recorder.load().then(() => {
+      for (const h of opt.recordHosts) {
+        const key = normHost(h);
+        if (key) recorder.ensure(key);
+      }
+    });
+  }
+
+  // ── Приём телеметрии и событий: от браузеров (doReport) и от регистратора ────
+  // Событие стенда видят все зрители и регистратор - пишем его один раз. Ключ
+  // включает uptime_ms стенда, поэтому одинаковые события в разное время различаются.
+  function ingestEvent(key, it) {
+    const hs = hostState(key);
+    const ev = String(it.event ?? "").slice(0, 32);
+    const detail = String(it.detail ?? "").slice(0, 160);
+    const k = `${ev}|${detail}|${it.uptime_ms}`;
+    if (hs.seenEvents.has(k)) return;
+    hs.seenEvents.set(k, Date.now());
+    if (hs.seenEvents.size > 500) hs.seenEvents.delete(hs.seenEvents.keys().next().value);
+    record(hs, "stand", detail ? `${ev.toUpperCase()} · ${detail}` : ev.toUpperCase(), {
+      event: ev,
+      detail,
+      uptime_ms: it.uptime_ms,
+    });
+    runs.event(key, { event: ev, detail });
+  }
+
+  // Телеметрия (в реальных единицах): каждый кадр - в испытание, в суточный файл -
+  // с прореживанием до шага записи.
+  function ingestTelemetry(key, t, ts) {
+    if (!t || typeof t !== "object" || typeof t.uptime_ms !== "number") return;
+    runs.feed(key, t, ts);
+    if (!opt.telemetryIntervalMs) return;
+    const hs = hostState(key);
+    const last = hs.lastTeleUptime;
+    // Кадры от нескольких источников: пишем только если стенд ушёл вперёд на шаг
+    // записи. Скачок назад больше чем на 5 с - стенд перезагрузился.
+    const rebooted = last !== null && t.uptime_ms < last - 5000;
+    if (last === null || rebooted || t.uptime_ms - last >= opt.telemetryIntervalMs * 0.8) {
+      hs.lastTeleUptime = t.uptime_ms;
+      const row = {};
+      for (const [k2, v] of Object.entries(t)) {
+        if (typeof v === "number" || typeof v === "string" || typeof v === "boolean" || v === null) row[k2] = v;
+      }
+      journal.write(`telemetry_${fileSafe(key)}`, { ts, host: key, ...row });
+    }
+  }
 
   /** @type {Map<string, any>} ключ стенда -> состояние канала */
   const hosts = new Map();
@@ -365,10 +484,10 @@ export function createApi(overrides = {}) {
   }
 
   // ── Журнал + рассылка ──────────────────────────────────────────────────────
-  // kind: lock | cmd | config | warn | program | stand | conn | presence
+  // kind: lock | cmd | config | warn | program | run | stand | conn | presence | recorder
   // Записи lock/cmd/config/warn дополнительно рассылаются зрителям стенда, чтобы
   // у всех в экранном журнале было видно, кто что сделал.
-  const BROADCAST_KINDS = new Set(["lock", "cmd", "config", "warn", "program"]);
+  const BROADCAST_KINDS = new Set(["lock", "cmd", "config", "warn", "program", "run"]);
 
   function record(hs, kind, text, extra = {}) {
     const entry = { ts: Date.now(), host: hs.key, kind, text, ...extra };
@@ -615,40 +734,13 @@ export function createApi(overrides = {}) {
     for (const it of body.items.slice(0, 1000)) {
       if (!it || typeof it !== "object") continue;
       switch (it.type) {
-        case "event": {
-          // Событие стенда видят все зрители - пишем его один раз. Ключ включает
-          // uptime_ms стенда, поэтому одинаковые события в разное время различаются.
-          const ev = String(it.event ?? "").slice(0, 32);
-          const detail = String(it.detail ?? "").slice(0, 160);
-          const k = `${ev}|${detail}|${it.uptime_ms}`;
-          if (hs.seenEvents.has(k)) break;
-          hs.seenEvents.set(k, Date.now());
-          if (hs.seenEvents.size > 500) hs.seenEvents.delete(hs.seenEvents.keys().next().value);
-          record(hs, "stand", detail ? `${ev.toUpperCase()} · ${detail}` : ev.toUpperCase(), {
-            event: ev,
-            detail,
-            uptime_ms: it.uptime_ms,
-          });
+        case "event":
+          ingestEvent(key, it);
           break;
-        }
-        case "telemetry": {
-          if (!opt.telemetryIntervalMs) break;
-          const t = it.t;
-          if (!t || typeof t !== "object" || typeof t.uptime_ms !== "number") break;
-          const last = hs.lastTeleUptime;
-          // Кадры от нескольких зрителей: пишем только если стенд ушёл вперёд на шаг
-          // записи. Скачок назад больше чем на 5 с - стенд перезагрузился.
-          const rebooted = last !== null && t.uptime_ms < last - 5000;
-          if (last === null || rebooted || t.uptime_ms - last >= opt.telemetryIntervalMs * 0.8) {
-            hs.lastTeleUptime = t.uptime_ms;
-            const row = {};
-            for (const [k2, v] of Object.entries(t)) {
-              if (typeof v === "number" || typeof v === "string" || typeof v === "boolean") row[k2] = v;
-            }
-            journal.write(`telemetry_${fileSafe(key)}`, { ts: typeof it.ts === "number" ? it.ts : Date.now(), host: key, ...row });
-          }
+        case "telemetry":
+          // Панель присылает телеметрию уже в реальных единицах.
+          ingestTelemetry(key, it.t, typeof it.ts === "number" ? it.ts : Date.now());
           break;
-        }
         case "cmd":
         case "config": {
           const text = String(it.text ?? "").slice(0, 300);
@@ -706,6 +798,9 @@ export function createApi(overrides = {}) {
 
     const hs = hostState(key);
     hs.emptySince = null;
+    // Стенд открыли в панели - регистратор начинает его писать (и после перезапуска
+    // сервера продолжит, даже если панель закрыта).
+    if (recorder && opt.recordAuto) recorder.ensure(key);
     let c = hs.clients.get(clientId);
     const isNew = !c;
     if (!c) {
@@ -868,7 +963,13 @@ export function createApi(overrides = {}) {
       }
       if (changed) publish(hs);
       // Забыть стенды, на которые давно никто не смотрит.
-      if (!hs.owner && hs.clients.size === 0 && hs.emptySince && now - hs.emptySince > 10 * 60_000) {
+      if (
+        !hs.owner &&
+        hs.clients.size === 0 &&
+        hs.emptySince &&
+        now - hs.emptySince > 10 * 60_000 &&
+        !recorder?.isConnected(hs.key)
+      ) {
         hosts.delete(hs.key);
       }
     }
@@ -936,6 +1037,86 @@ export function createApi(overrides = {}) {
     } else if (route.startsWith("logs/") && req.method === "GET") {
       const [, day, file] = route.split("/");
       downloadLog(res, day ?? "", file ?? "", url.searchParams.get("format")).catch(fail);
+    } else if (route === "recorder" && req.method === "GET") {
+      sendJson(res, 200, { ok: true, enabled: !!recorder, hosts: recorder?.status() ?? [] });
+    } else if (route === "recorder" && req.method === "POST") {
+      readJson(req)
+        .then((b) => {
+          const key = normHost(b.host);
+          if (!recorder || !key) return sendJson(res, 400, { ok: false, error: "bad_request" });
+          if (b.enabled === false) recorder.remove(key);
+          else recorder.ensure(key);
+          sendJson(res, 200, { ok: true, hosts: recorder.status() });
+        })
+        .catch(fail);
+    } else if (route === "runs" && req.method === "GET") {
+      const key = url.searchParams.get("host") ? normHost(url.searchParams.get("host")) : null;
+      sendJson(res, 200, { ok: true, runs: runs.list(key), active: key ? runs.activeFor(key) : null, tz: opt.tz });
+    } else if (route.startsWith("runs/")) {
+      const [, id, sub] = route.split("/");
+      const meta = runs.get(id ?? "");
+      if (!meta) {
+        sendJson(res, 404, { ok: false, error: "not_found", message: "Испытание не найдено" });
+      } else if (!sub && req.method === "GET") {
+        sendJson(res, 200, { ok: true, run: meta });
+      } else if (sub === "samples" && req.method === "GET") {
+        const max = Math.min(Number(url.searchParams.get("max")) || 0, 200_000);
+        const format = url.searchParams.get("format");
+        runs
+          .readSamples(id, format === "csv" ? 0 : max)
+          .then((rows) => {
+            if (format !== "csv") {
+              sendJson(res, 200, { ok: true, columns: SAMPLE_COLUMNS, startedAt: meta.startedAt, rows: rows ?? [] });
+              return;
+            }
+            const name = `${meta.id}${meta.program?.name ? "_" + meta.program.name.replace(/[^\p{L}\p{N}_-]+/gu, "_") : ""}`;
+            res.writeHead(200, {
+              "Content-Type": "text/csv; charset=utf-8",
+              "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(name)}.csv`,
+            });
+            res.write("\uFEFF" + ["time", ...SAMPLE_COLUMNS].join(";") + "\r\n");
+            for (const r of rows ?? []) {
+              const time = clock(meta.startedAt + Math.round((r[0] ?? 0) * 1000)).full;
+              res.write([time, ...r.map(csvCell)].join(";") + "\r\n");
+            }
+            res.end();
+          })
+          .catch(fail);
+      } else if (sub === "note" && req.method === "POST") {
+        readJson(req)
+          .then(async (b) => {
+            const user = cleanName(b.user) || "без имени";
+            const m = await runs.setNote(id, b.note, user);
+            journal.write("journal", {
+              ts: Date.now(),
+              host: meta.host,
+              kind: "run",
+              user,
+              text: `${user}: примечание к испытанию ${id}: ${String(b.note ?? "").slice(0, 200)}`,
+            });
+            sendJson(res, 200, { ok: true, run: m });
+          })
+          .catch(fail);
+      } else if (!sub && req.method === "DELETE") {
+        const user = cleanName(url.searchParams.get("user") ?? "") || "без имени";
+        runs
+          .remove(id)
+          .then((ok) => {
+            if (ok) {
+              journal.write("journal", {
+                ts: Date.now(),
+                host: meta.host,
+                kind: "run",
+                user,
+                text: `${user}: испытание ${id} удалено`,
+              });
+            }
+            sendJson(res, ok ? 200 : 409, ok ? { ok: true } : { ok: false, message: "Идёт сейчас - удалить нельзя" });
+          })
+          .catch(fail);
+      } else {
+        sendJson(res, 404, { ok: false, error: "not_found" });
+      }
     } else if (route === "programs" && req.method === "GET") {
       library
         .list()
@@ -981,6 +1162,8 @@ export function createApi(overrides = {}) {
   }
 
   function close() {
+    recorder?.close();
+    void runs.closeAll();
     clearInterval(tick);
     clearInterval(ping);
     clearInterval(prune);

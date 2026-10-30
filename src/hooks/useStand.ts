@@ -9,10 +9,11 @@ import {
   type Program,
   type ProgramApplyResponse,
   type SpeedPoint,
+  type StandSettings,
   type StandEvent,
   type Telemetry,
 } from "../types";
-import { ackReason, errorLabel, stateMeta } from "../standLogic";
+import { ackReason, errorLabel, guardLabel, stateMeta } from "../standLogic";
 import { coerceProgram, toFirmwareForm } from "../programLogic";
 import { commandToFirmware, defaultRevFactor, programScale, revFactor, telemetryToShaft } from "../units";
 import type { StandObserver } from "../coord/useCoordinator";
@@ -21,8 +22,15 @@ import type { StandObserver } from "../coord/useCoordinator";
 export interface LogEntry {
   id: number;
   ts: number; // время по часам клиента, мс
-  kind: "state" | "cycle" | "module" | "done" | "error" | "sys" | "cmd" | "ack" | "lock" | "user";
+  kind: "state" | "cycle" | "module" | "done" | "error" | "warn" | "sys" | "cmd" | "ack" | "lock" | "user";
   text: string;
+}
+
+/** Предупреждение автоматического контроля: код (hall1_mismatch, ...) и значение. */
+export interface GuardWarning {
+  ts: number;
+  code: string;
+  value: number;
 }
 
 export interface UseStand {
@@ -31,10 +39,12 @@ export interface UseStand {
   /** Скользящая история скорости и тока для графика (от старых к новым). */
   history: SpeedPoint[];
   log: LogEntry[];
+  /** Последнее предупреждение контроля вращения (автостоп выключен) - для карточки датчиков. */
+  lastWarn: GuardWarning | null;
   /** Отправить текстовый кадр команды по WS (при закрытом сокете - откат на REST). */
   send: (cmd: Command) => void;
-  /** POST параметров стенда (ускорение, порог тока, удержание). */
-  sendConfig: (accelRpmS: number, currentLimitA: number, holdIdle: boolean) => Promise<ConfigApplyResponse | null>;
+  /** POST параметров стенда (ускорение, порог тока, удержание, датчики Холла). */
+  sendConfig: (s: StandSettings) => Promise<ConfigApplyResponse | null>;
   /** Загрузить программу в стенд (POST /v1/program, сохраняется в NVS). */
   uploadProgram: (p: Program) => Promise<ProgramApplyResponse | null>;
   /** Прочитать загруженную в стенд программу (GET /v1/program). */
@@ -58,6 +68,10 @@ const LOG_MAX = 300;
 // кадра - почти наверняка сработал лимит клиентов прошивки (NET_MAX_WS_CLIENTS):
 // прошивка принимает подключение и тут же его закрывает.
 const INSTANT_CLOSE_MS = 2000;
+// Стенд шлёт телеметрию 5 раз в секунду. Если кадров нет дольше этого, соединение
+// считается мёртвым (пропало питание/WiFi стенда - браузер может часами не замечать
+// обрыв TCP и показывать застывшие данные) и переоткрывается.
+const STALE_MS = 3000;
 
 /**
  * Владеет WebSocket-соединением со стендом и предоставляет реактивную телеметрию,
@@ -70,8 +84,11 @@ export function useStand(host: string, observer?: StandObserver): UseStand {
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
   const [history, setHistory] = useState<SpeedPoint[]>([]);
   const [log, setLog] = useState<LogEntry[]>([]);
+  const [lastWarn, setLastWarn] = useState<GuardWarning | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const lastFrameAt = useRef<number>(0);
+  const staleTimer = useRef<number | null>(null);
   // Коэффициент «прошивочный оборот → реальный» (units.ts), по последнему кадру.
   const kRef = useRef<number>(defaultRevFactor());
   const reconnectTimer = useRef<number | null>(null);
@@ -140,6 +157,9 @@ export function useStand(host: string, observer?: StandObserver): UseStand {
         t: (Date.now() - t0.current) / 1000,
         rpm: Number(t.rpm) || 0,
         amps: t.ina_ok ? Number(t.current_a) : null,
+        // Датчик скорости знака не знает - берём направление вращения двигателя.
+        h1: t.h1_rpm === undefined || t.h1_st === "off" ? null : Number(t.h1_rpm) * dirSign(t),
+        h2: t.h2_rpm === undefined || t.h2_st === "off" ? null : Number(t.h2_rpm) * dirSign(t),
       };
       const next = prev.concat(point);
       return next.length > HISTORY_MAX
@@ -157,7 +177,14 @@ export function useStand(host: string, observer?: StandObserver): UseStand {
           const sep = detail.indexOf(":");
           const cmd = sep >= 0 ? detail.slice(0, sep) : detail;
           const result = sep >= 0 ? detail.slice(sep + 1) : "";
-          if (result === "ok") pushLog("ack", `${cmd} принята`);
+          if (cmd === "GUARD" && (result === "on" || result === "off")) {
+            pushLog(
+              result === "on" ? "ack" : "warn",
+              result === "on"
+                ? "Автостоп по датчикам Холла/току ВКЛЮЧЁН"
+                : "Автостоп по датчикам Холла/току ВЫКЛЮЧЕН - при расхождении будут только предупреждения",
+            );
+          } else if (result === "ok") pushLog("ack", `${cmd} принята`);
           else if (result === "ok_after_stop") pushLog("ack", `${cmd} принята - выполнится после плавной остановки`);
           else pushLog("error", `${cmd} отклонена: ${ackReason(result)}`);
           return;
@@ -182,6 +209,15 @@ export function useStand(host: string, observer?: StandObserver): UseStand {
           }
           else pushLog("done", `Завершено: ${detail}`);
           return;
+        case "warn": {
+          // "<код>:<значение>" - автостоп выключен, стенд продолжает работу.
+          const sep = detail.lastIndexOf(":");
+          const code = sep >= 0 ? detail.slice(0, sep) : detail;
+          const value = sep >= 0 ? Number(detail.slice(sep + 1)) : 0;
+          setLastWarn({ ts: Date.now(), code, value });
+          pushLog("warn", `ПРЕДУПРЕЖДЕНИЕ: ${guardLabel(code, value)} (автостоп выключен, работа продолжается)`);
+          return;
+        }
         case "error":
           pushLog("error", `АВАРИЯ: ${errorLabel(detail)}`);
           return;
@@ -195,6 +231,10 @@ export function useStand(host: string, observer?: StandObserver): UseStand {
   );
 
   const connect = useCallback(() => {
+    if (staleTimer.current !== null) {
+      clearInterval(staleTimer.current);
+      staleTimer.current = null;
+    }
     if (reconnectTimer.current !== null) {
       clearTimeout(reconnectTimer.current);
       reconnectTimer.current = null;
@@ -271,6 +311,15 @@ export function useStand(host: string, observer?: StandObserver): UseStand {
     ws.onopen = () => {
       settled = true;
       openedAt = Date.now();
+      lastFrameAt.current = openedAt;
+      if (staleTimer.current !== null) clearInterval(staleTimer.current);
+      staleTimer.current = window.setInterval(() => {
+        if (wsRef.current !== ws || Date.now() - lastFrameAt.current < STALE_MS) return;
+        if (staleTimer.current !== null) clearInterval(staleTimer.current);
+        staleTimer.current = null;
+        pushLog("error", `Нет данных от стенда дольше ${STALE_MS / 1000} с - соединение потеряно, переподключаюсь`);
+        connect();
+      }, 1000);
       clearConnectTimeout();
       reconnectDelay.current = RECONNECT_MIN;
       setStatus("connected");
@@ -287,12 +336,13 @@ export function useStand(host: string, observer?: StandObserver): UseStand {
         return;
       }
       gotFrame = true;
+      lastFrameAt.current = Date.now();
       if (isEvent(msg)) {
         handleEvent(msg);
         observerRef.current?.onEvent(msg);
       } else if (isTelemetry(msg)) {
         // Дальше по панели и в серверный журнал - только реальные обороты вала.
-        kRef.current = revFactor(msg.steps_per_rev);
+        kRef.current = revFactor(msg.steps_per_rev, msg.shaft_steps_per_rev);
         const t = telemetryToShaft(msg);
         handleTelemetry(t);
         observerRef.current?.onTelemetry(t as unknown as { uptime_ms: number } & Record<string, unknown>);
@@ -326,6 +376,10 @@ export function useStand(host: string, observer?: StandObserver): UseStand {
     connect();
     return () => {
       manualClose.current = true;
+      if (staleTimer.current !== null) {
+        clearInterval(staleTimer.current);
+        staleTimer.current = null;
+      }
       if (reconnectTimer.current !== null) {
         clearTimeout(reconnectTimer.current);
         reconnectTimer.current = null;
@@ -380,12 +434,15 @@ export function useStand(host: string, observer?: StandObserver): UseStand {
   );
 
   const sendConfig = useCallback(
-    async (accelRpmS: number, currentLimitA: number, holdIdle: boolean): Promise<ConfigApplyResponse | null> => {
+    async (cfg: StandSettings): Promise<ConfigApplyResponse | null> => {
       try {
         const q = new URLSearchParams({
-          accel_rpm_s: String(Math.round((accelRpmS / kRef.current) * 1000) / 1000),
-          current_limit_a: String(currentLimitA),
-          hold_idle: holdIdle ? "1" : "0",
+          accel_rpm_s: String(Math.round((cfg.accelRpmS / kRef.current) * 1000) / 1000),
+          current_limit_a: String(cfg.currentLimitA),
+          hold_idle: cfg.holdIdle ? "1" : "0",
+          hall_mask: String(cfg.hallMask),
+          hall_tol: String(cfg.hallTol),
+          current_min_a: String(cfg.currentMinA),
         });
         const r = await fetch(`${httpBase(host)}/v1/config?${q.toString()}`, { method: "POST" });
         let body: ConfigApplyResponse | null = null;
@@ -397,9 +454,13 @@ export function useStand(host: string, observer?: StandObserver): UseStand {
         if (r.ok && body?.applied) {
           body.applied.accel_rpm_s = Math.round(body.applied.accel_rpm_s * kRef.current * 100) / 100;
           const a = body.applied;
+          const hall =
+            a.hall_mask === undefined
+              ? ""
+              : `, датчики Холла: ${["выкл", "№1", "№2", "№1 и №2"][a.hall_mask] ?? a.hall_mask}, допуск ${a.hall_tol}, мин. ток ${a.current_min_a ? `${a.current_min_a} А` : "выкл"}`;
           pushLog(
             "cmd",
-            `Параметры применены: ускорение ${a.accel_rpm_s} об/мин/с, порог тока ${a.current_limit_a ? `${a.current_limit_a} А` : "выкл"}, удержание ${a.hold_idle ? "вкл" : "выкл"}`,
+            `Параметры применены: ускорение ${a.accel_rpm_s} об/мин/с, порог тока ${a.current_limit_a ? `${a.current_limit_a} А` : "выкл"}, удержание ${a.hold_idle ? "вкл" : "выкл"}${hall}`,
           );
         } else {
           pushLog("error", `Параметры отклонены: HTTP ${r.status} ${body?.error ?? ""}${body?.detail ? ` - ${body.detail}` : ""}`);
@@ -472,7 +533,26 @@ export function useStand(host: string, observer?: StandObserver): UseStand {
   }, [connect, commitLive]);
 
   return useMemo(
-    () => ({ status, telemetry, history, log, send, sendConfig, uploadProgram, fetchProgram, reconnect, note: pushLog }),
-    [status, telemetry, history, log, send, sendConfig, uploadProgram, fetchProgram, reconnect, pushLog],
+    () => ({
+      status,
+      telemetry,
+      history,
+      log,
+      lastWarn,
+      send,
+      sendConfig,
+      uploadProgram,
+      fetchProgram,
+      reconnect,
+      note: pushLog,
+    }),
+    [status, telemetry, history, log, lastWarn, send, sendConfig, uploadProgram, fetchProgram, reconnect, pushLog],
   );
+}
+
+/** Знак скорости для датчиков Холла: по фактическому вращению, в покое - по направлению. */
+function dirSign(t: Telemetry): number {
+  if (t.rpm > 0.01) return 1;
+  if (t.rpm < -0.01) return -1;
+  return t.dir === "ccw" ? -1 : 1;
 }

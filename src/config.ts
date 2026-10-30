@@ -20,6 +20,9 @@ export const FIRMWARE = {
   accelRpmS: 20, // ACCEL_RPM_S_DEFAULT
   currentLimitA: 0, // CURRENT_LIMIT_A_DEFAULT (0 - защита выключена)
   holdIdle: true, // HOLD_IDLE_DEFAULT
+  hallMask: 3, // HALL_MASK_DEFAULT: оба датчика Холла в контроле
+  hallTol: 1, // HALL_TOL_DEFAULT
+  currentMinA: 0, // CURRENT_MIN_A_DEFAULT (0 - проверка выключена)
 } as const;
 
 export const LIMITS = {
@@ -35,6 +38,7 @@ export const LIMITS = {
   revsMax: 250_000, // прошивка: 1 000 000 своих оборотов = 250 000 реальных
   pauseMsMax: 3_600_000,
   nameMax: 40,
+  hallTolMax: 20, // HALL_TOL_MAX
 } as const;
 
 function envHost(): string | undefined {

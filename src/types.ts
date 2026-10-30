@@ -53,11 +53,42 @@ export interface Telemetry {
   rpm_max: number;
   steps_per_rev: number;
   uptime_ms: number;
+
+  // ── Датчики Холла и контроль вращения (прошивка с датчиками; у старой - нет) ──
+  // Обороты и скорость датчиков - реальные обороты вала, панель их не пересчитывает.
+  /** Реальных импульсов на оборот вала (деление шага драйвера). */
+  shaft_steps_per_rev?: number;
+  /** Минимальный ток при вращении, А (0 - проверка выключена). */
+  cfg_current_min_a?: number;
+  /** Какие датчики участвуют в контроле: бит 0 - №1, бит 1 - №2. */
+  hall_mask?: number;
+  /** Автостоп по датчикам/току: 1 - авария, 0 - только предупреждения. */
+  hall_guard?: number;
+  /** Допуск: «плохих» проходов подряд до аварии. */
+  hall_tol?: number;
+  h1_st?: HallState;
+  h1_on?: number;
+  h1_revs?: number;
+  h1_rpm?: number;
+  h1_bad?: number;
+  h1_lag?: number | null;
+  h2_st?: HallState;
+  h2_on?: number;
+  h2_revs?: number;
+  h2_rpm?: number;
+  h2_bad?: number;
+  h2_lag?: number | null;
+  /** Сдвиг датчика 2 относительно датчика 1, ° (если hall_phase_ok). */
+  hall_phase_ok?: number;
+  hall_phase?: number;
 }
+
+/** off - датчик не участвует, learn - ищет магнит, ok - сверка с шагами идёт. */
+export type HallState = "off" | "learn" | "ok";
 
 /** Кадр дискретного события. */
 export interface StandEvent {
-  event: "state" | "ack" | "module" | "cycle" | "done" | "error";
+  event: "state" | "ack" | "module" | "cycle" | "done" | "error" | "warn";
   // ack:    "<CMD>:ok" | "<CMD>:ok_after_stop" | "<CMD>:ignored_<STATE>" | "<CMD>:<причина>"
   // module: "<цикл>/<циклов>:<модуль>/<модулей>"
   // cycle:  "<завершено>/<всего>"
@@ -91,7 +122,15 @@ export interface LibraryProgram extends Program {
 
 /** Ответ POST /v1/config. */
 export interface ConfigApplyResponse {
-  applied?: { accel_rpm_s: number; current_limit_a: number; hold_idle: number };
+  applied?: {
+    accel_rpm_s: number;
+    current_limit_a: number;
+    hold_idle: number;
+    hall_mask?: number;
+    hall_guard?: number;
+    hall_tol?: number;
+    current_min_a?: number;
+  };
   error?: string;
   detail?: string;
 }
@@ -116,6 +155,19 @@ export interface SpeedPoint {
   t: number;   // секунды по часам клиента
   rpm: number; // фактическая скорость, об/мин (со знаком)
   amps: number | null;
+  /** Скорость по датчикам Холла, со знаком направления (null - датчика нет). */
+  h1: number | null;
+  h2: number | null;
+}
+
+/** Параметры стенда для POST /v1/config. */
+export interface StandSettings {
+  accelRpmS: number;
+  currentLimitA: number;
+  holdIdle: boolean;
+  hallMask: number;
+  hallTol: number;
+  currentMinA: number;
 }
 
 export function isTelemetry(m: unknown): m is Telemetry {

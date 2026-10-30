@@ -11,6 +11,12 @@ export interface CoordOptions {
   warnBeforeMs: number;
   telemetryIntervalMs: number;
   retentionDays: number;
+  recorder: boolean;
+  recordHosts: string[];
+  recordAuto: boolean;
+  runSampleMs: number;
+  runRetentionDays: number;
+  shaftStepsPerRev: number;
 }
 
 export interface CoordApi {

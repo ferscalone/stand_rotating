@@ -152,7 +152,40 @@ export function errorLabel(code: string): string {
     case "":
       return "";
     default:
-      return code;
+      return guardLabel(code) || code;
+  }
+}
+
+/**
+ * Срабатывание автоматического контроля вращения (авария или, при выключенном
+ * автостопе, предупреждение). value - «плохих» проходов подряд / ток в мА.
+ */
+export function guardLabel(code: string, value?: number): string {
+  const m = /^hall([12])_(mismatch|no_pulse)$/.exec(code);
+  if (m) {
+    const n = m[1];
+    if (m[2] === "no_pulse") return `Датчик Холла №${n} молчит: вал по шагам прошёл больше оборота без импульса`;
+    const v = value !== undefined && value > 0 ? ` (${value} подряд)` : "";
+    return `Датчик Холла №${n} не совпадает с двигателем: вал не там, где должен быть по шагам${v}`;
+  }
+  if (code === "no_current") {
+    const v = value !== undefined ? ` (${(value / 1000).toFixed(2)} А)` : "";
+    return `Нет тока при вращении${v}`;
+  }
+  return "";
+}
+
+/** Состояние датчика Холла по-русски. */
+export function hallStateLabel(st: string | undefined): string {
+  switch (st) {
+    case "ok":
+      return "сверка идёт";
+    case "learn":
+      return "ищет магнит";
+    case "off":
+      return "выключен";
+    default:
+      return "нет данных";
   }
 }
 
