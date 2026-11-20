@@ -54,7 +54,7 @@ export function loadOptions(overrides = {}) {
     dataDir: path.resolve(process.env.DATA_DIR || "data"),
     tz: resolveTz(process.env.LOG_TZ || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"),
     // Бездействие владельца, после которого канал освобождается сам (0 - никогда).
-    idleTimeoutMs: envNum("LOCK_IDLE_TIMEOUT_S", 600) * 1000,
+    idleTimeoutMs: envNum("LOCK_IDLE_TIMEOUT_S", 1800) * 1000,
     // Сколько ждать владельца, закрывшего вкладку / потерявшего сеть (перезагрузка
     // страницы укладывается в это окно и управление не теряется).
     graceMs: envNum("LOCK_DISCONNECT_GRACE_S", 45) * 1000,
