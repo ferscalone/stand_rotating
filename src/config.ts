@@ -1,5 +1,5 @@
 // ── Определение хоста стенда ──────────────────────────────────────────────────
-// Адрес стенда выбирается в таком порядке:
+// Адрес стенда выбирается при запуске панели:
 //
 //   1. localStorage("rotate.stand_host") - задаётся из поля в шапке; для каждого браузера.
 //   2. import.meta.env.VITE_STAND_HOST   - необязательное значение по умолчанию из сборки (.env).
@@ -10,6 +10,7 @@
 const LS_KEY = "rotate.stand_host";
 
 export const DEFAULT_HOST = "192.168.2.68";
+const LEGACY_DEFAULT_HOST = "1.rotate.esp32-s3.local";
 
 // Значения, зеркалированные из firmware/src/Config.h. Используются до прихода
 // первого кадра телеметрии и для проверки ввода; авторитет - валидатор прошивки.
@@ -41,13 +42,14 @@ export const LIMITS = {
 
 function envHost(): string | undefined {
   const v = import.meta.env.VITE_STAND_HOST;
-  return typeof v === "string" && v.trim() ? v.trim() : undefined;
+  const host = typeof v === "string" ? v.trim() : "";
+  return host && host.toLowerCase() !== LEGACY_DEFAULT_HOST ? host : undefined;
 }
 
 export function resolveHost(): string {
   try {
-    const stored = localStorage.getItem(LS_KEY);
-    if (stored && stored.trim()) return stored.trim();
+    const stored = localStorage.getItem(LS_KEY)?.trim();
+    if (stored && stored.toLowerCase() !== LEGACY_DEFAULT_HOST) return stored;
   } catch {
     // localStorage может быть недоступен (приватный режим / file://).
   }
